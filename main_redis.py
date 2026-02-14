@@ -728,7 +728,7 @@ async def send_andre_notification(booking_data: dict) -> bool:
     
     # SMTP Config (Namecheap Private Email)
     SMTP_HOST = "mail.privateemail.com"
-    SMTP_PORT = 465
+    SMTP_PORT = 587  # STARTTLS
     SMTP_USER = os.environ.get("SMTP_USER", "carlos@chatproai.io")
     SMTP_PASS = os.environ.get("SMTP_PASS", "}=3(/z^Kh.A8,dF")
     ANDRE_EMAIL = "drebroeders@gmail.com"
@@ -762,10 +762,12 @@ Your ChatBot 🤖
         msg["To"] = ANDRE_EMAIL
         msg.attach(MIMEText(body, "plain", "utf-8"))
         
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, ANDRE_EMAIL, msg.as_string())
+        # Use STARTTLS on port 587
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(SMTP_USER, ANDRE_EMAIL, msg.as_string())
+        server.quit()
         
         logger.info(f"✅ Sent booking notification to Dre: {booking_data.get('apartment')}")
         return True
