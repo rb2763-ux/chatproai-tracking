@@ -698,7 +698,6 @@ class GHHChatRequest(BaseModel):
     conversationId: Optional[str] = None
     language: str = "en"
 
-@app.post("/api/ghh-chat")
 # Function for sending booking requests to Dre
 GHH_FUNCTIONS = [
     {
