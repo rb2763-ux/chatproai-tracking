@@ -720,17 +720,20 @@ GHH_FUNCTIONS = [
 ]
 
 async def send_andre_notification(booking_data: dict) -> bool:
-    """Send booking notification email to Dre via AWS SES."""
+    """Send booking notification email to Dre via SMTP."""
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    # SMTP Config (Namecheap Private Email)
+    SMTP_HOST = "mail.privateemail.com"
+    SMTP_PORT = 465
+    SMTP_USER = os.environ.get("SMTP_USER", "carlos@chatproai.io")
+    SMTP_PASS = os.environ.get("SMTP_PASS", "}=3(/z^Kh.A8,dF")
+    ANDRE_EMAIL = "drebroeders@gmail.com"
+    
     try:
-        import boto3
-        from botocore.config import Config
-        
-        ses = boto3.client(
-            'ses',
-            region_name='eu-central-1',
-            config=Config(connect_timeout=5, read_timeout=10)
-        )
-        
         subject = f"🏠 New Booking Request: {booking_data.get('apartment', 'Unknown')}"
         
         body = f"""Hi Dre,
@@ -753,18 +756,21 @@ Best,
 Your ChatBot 🤖
 """
         
-        ses.send_email(
-            Source='info@chatproai.io',
-            Destination={'ToAddresses': ['drebroeders@gmail.com']},
-            Message={
-                'Subject': {'Data': subject, 'Charset': 'UTF-8'},
-                'Body': {'Text': {'Data': body, 'Charset': 'UTF-8'}}
-            }
-        )
-        logger.info(f"Sent booking notification to Dre: {booking_data.get('apartment')}")
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = ANDRE_EMAIL
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, ANDRE_EMAIL, msg.as_string())
+        
+        logger.info(f"✅ Sent booking notification to Dre: {booking_data.get('apartment')}")
         return True
     except Exception as e:
-        logger.error(f"Failed to send Dre notification: {e}")
+        logger.error(f"❌ Failed to send Dre notification: {e}")
         return False
 
 @app.post("/api/ghh-chat")
