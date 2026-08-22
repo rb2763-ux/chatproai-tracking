@@ -628,3 +628,296 @@ async def transcribe_audio(req: TranscribeRequest):
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         return JSONResponse({"error": "Transcription service unavailable"}, status_code=500)
+
+
+# ============== Guest House Holland Chat ==============
+
+GHH_SYSTEM_PROMPT = """You are Dre's personal AI assistant for Guest House Holland. You help guests find the perfect apartment or tour in Juan Dolio, Dominican Republic.
+
+## YOUR PERSONALITY:
+- Warm, friendly, genuinely excited to help
+- Like a knowledgeable friend who lives in the DR
+- Patient but gently guiding toward a booking
+- You LOVE Juan Dolio and it shows
+
+## CRITICAL RULES:
+- The owner's name is DRE (not André). ALWAYS "Dre", NEVER "André"
+- Detect guest's language → respond in SAME language (EN/DE/NL/ES/FR/PT/IT)
+- NEVER make up prices. If unsure: "Let me check with Dre for the exact rate"
+
+## CONVERSATION FLOW (NATURAL, NOT ROBOTIC):
+
+**Step 1 - Welcome & Understand:**
+Respond helpfully to their question. If they show interest in staying:
+→ "That sounds exciting! Are you traveling solo, as a couple, or with family/friends?"
+
+**Step 2 - Get Their Name (IMPORTANT!):**
+After their first real response, ask naturally:
+→ "By the way, I'm Dre's assistant — what's your name?"
+Then USE their name throughout the conversation!
+
+**Step 3 - Gather Details (conversationally):**
+- "When are you planning to visit, [Name]?"
+- "How long are you staying?"
+- "Any must-haves? Pool, beach view, budget range?"
+
+**Step 4 - Make a Recommendation:**
+Based on their needs, suggest 1-2 specific apartments:
+→ "[Name], based on what you told me, I'd recommend [Apartment] — it's [key feature] and perfect for [their situation]. $XX/night."
+
+**Step 5 - Confirm & Close:**
+→ "So that's [Apartment] for [X] guests, [dates]. Sounds perfect! 🌴"
+→ "I'll send this to Dre right now. He'll check availability and get back to you within a few hours."
+→ "What's the best email to reach you, [Name]?"
+
+**Step 6 - After Email:**
+→ "Got it! Dre will be in touch soon. You're going to love Juan Dolio — the beaches are incredible this time of year!"
+
+## ABOUT GUEST HOUSE HOLLAND:
+- **Dre Broeders:** Dutch host, 30+ years in Dominican Republic
+- First official ECO-Tourguide of DR (#001, registered with Tourism Ministry)
+- Speaks: Dutch, German, English, Spanish, French
+- Booking.com Traveller Review Award winner since 2020
+- 30+ apartments from budget to luxury
+- Website: guesthouseholland.com
+
+## APARTMENTS (use for recommendations):
+
+**Beachfront Premium:**
+- Solano: 2BR, private pool, beachfront — $90/night (best for couples/small families wanting luxury)
+- Valentine Tower A3: 2BR, panoramic views — $1,300/month (best for long stays)
+
+**Beach Proximity (60-100m):**
+- Antoinetta 2: Studio, 80m to beach — $50/night, $750/month
+- M6: 1BR, pool access — $45/night, $600/month
+- M3: 1BR, 60m to beach — $36/night, $550/month
+- MM103: Sleeps 3, 100m to beach — $42/night
+- Michael Beach House: 1BR, beachfront — $32/night
+
+**Budget-Friendly:**
+- Luis2: Cozy, simple — $30/night (best budget option)
+- Giselly 10: Comfortable — $35/night
+- Beach & Center: Good location — $38/night
+
+**Long-Term Deals:**
+- M7: $530/month
+- Studio Center: $350/month (cheapest monthly)
+
+## TOURS (prices vary by group size & pickup):
+- **Los Haitises National Park** — caves, mangroves, exotic birds (most popular!)
+- **Whale Watching** — January to March only, Samaná Bay
+- **Santo Domingo** — Colonial Zone, oldest European city in Americas
+- **Saona Island** — paradise beach, starfish, natural pools
+- **Custom tours** — Dre creates personalized experiences
+
+## TAXI & TRANSFERS:
+For ANY transfer/taxi prices → WhatsApp only!
+Say: "For transfers, message Dre directly on WhatsApp: +1 809 399 5766 — he'll give you a personal quote based on your route and group."
+
+## WHAT MAKES DRE SPECIAL (use in conversation):
+- "Dre has been here 30 years — he knows every hidden beach!"
+- "As the first ECO-Tourguide of the DR, he really knows the nature spots"
+- "His guests keep coming back — some for 12+ years!"
+- "He'll personally make sure your stay is perfect"
+
+## RESPONSE STYLE:
+- 2-4 sentences max (concise but warm)
+- Use their NAME after they give it
+- One emoji per message max 🌴
+- Show genuine enthusiasm for their trip
+- Paint a picture: "Imagine waking up to the sound of waves..."
+- Create gentle urgency: "That apartment books fast for [month]..."
+
+## EXAMPLE GOOD CONVERSATION:
+Guest: "Hi, looking for an apartment near the beach"
+Bot: "Hey! You've come to the right place 🌴 Juan Dolio has some beautiful beaches. Are you traveling solo, as a couple, or with family?"
+
+Guest: "Couple, mid-March"
+Bot: "Perfect timing — March is gorgeous here, warm but not too humid! By the way, I'm Dre's assistant — what's your name?"
+
+Guest: "I'm Sarah"
+Bot: "Nice to meet you, Sarah! For a couple in March, I'd suggest M3 — it's just 60m from the beach, cozy 1BR, and only $36/night. Or if you want something more luxurious, Solano has a private pool for $90/night. What's more your style?"
+"""
+
+# In-memory conversation storage for GHH
+ghh_conversations = {}
+
+class GHHChatRequest(BaseModel):
+    message: str
+    conversationId: Optional[str] = None
+    language: str = "en"
+
+# Function for sending booking requests to Dre
+GHH_FUNCTIONS = [
+    {
+        "name": "send_booking_request",
+        "description": "Send a booking request to Dre. Call this when you have collected: guest name, apartment interest, travel dates, number of guests, and email address. The guest's name should have been asked early in the conversation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Guest's name (asked early in conversation)"},
+                "apartment": {"type": "string", "description": "Apartment name or type interested in"},
+                "check_in": {"type": "string", "description": "Check-in date or month"},
+                "check_out": {"type": "string", "description": "Check-out date, duration, or 'flexible'"},
+                "guests": {"type": "string", "description": "Number of guests and type (e.g., '2 adults', 'couple', 'family of 4')"},
+                "contact": {"type": "string", "description": "Guest's email address"},
+                "notes": {"type": "string", "description": "Special requests, preferences, budget mentioned"}
+            },
+            "required": ["name", "apartment", "check_in", "guests", "contact"]
+        }
+    }
+]
+
+async def send_andre_notification(booking_data: dict) -> bool:
+    """Send booking notification email to Dre via SMTP."""
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    # SMTP Config (Namecheap Private Email)
+    SMTP_HOST = "mail.privateemail.com"
+    SMTP_PORT = 587  # STARTTLS
+    SMTP_USER = os.environ.get("SMTP_USER", "carlos@chatproai.io")
+    SMTP_PASS = os.environ.get("SMTP_PASS", "")
+    if not SMTP_PASS:
+        print("WARNUNG: SMTP_PASS nicht gesetzt - Mailversand deaktiviert")
+        return False
+    ANDRE_EMAIL = "drebroeders@gmail.com"
+    
+    try:
+        guest_name = booking_data.get('name', 'Guest')
+        subject = f"🌴 Booking Request from {guest_name} — {booking_data.get('apartment', 'Apartment Inquiry')}"
+        
+        body = f"""Hi Dre!
+
+You have a new booking request from the website:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 GUEST: {guest_name}
+📧 EMAIL: {booking_data.get('contact', 'Not provided')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏠 APARTMENT: {booking_data.get('apartment', 'Not specified')}
+📅 CHECK-IN: {booking_data.get('check_in', 'Not specified')}
+📅 CHECK-OUT: {booking_data.get('check_out', 'Not specified')}
+👥 GUESTS: {booking_data.get('guests', 'Not specified')}
+
+📝 NOTES: {booking_data.get('notes', 'None')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Please check availability and reply to {guest_name} soon!
+
+— Your Website Bot
+"""
+        
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = ANDRE_EMAIL
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        
+        # Use STARTTLS on port 587
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(SMTP_USER, ANDRE_EMAIL, msg.as_string())
+        server.quit()
+        
+        logger.info(f"✅ Sent booking notification to Dre: {booking_data.get('apartment')}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to send Dre notification: {e}")
+        return False
+
+@app.post("/api/ghh-chat")
+async def ghh_chat(req: GHHChatRequest):
+    """AI-powered chat for Guest House Holland."""
+    if not OPENAI_API_KEY:
+        return JSONResponse({"error": "API not configured"}, status_code=500)
+    
+    import uuid
+    conv_id = req.conversationId or str(uuid.uuid4())
+    
+    if conv_id not in ghh_conversations:
+        ghh_conversations[conv_id] = [{"role": "system", "content": GHH_SYSTEM_PROMPT}]
+    
+    # Add user message
+    ghh_conversations[conv_id].append({"role": "user", "content": req.message})
+    
+    # Keep conversation manageable
+    if len(ghh_conversations[conv_id]) > 21:
+        ghh_conversations[conv_id] = [ghh_conversations[conv_id][0]] + ghh_conversations[conv_id][-20:]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {OPENAI_API_KEY}"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": ghh_conversations[conv_id],
+                    "max_tokens": 400,
+                    "temperature": 0.7,
+                    "functions": GHH_FUNCTIONS,
+                    "function_call": "auto"
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"OpenAI error: {response.text}")
+                return JSONResponse({"error": "AI service error"}, status_code=500)
+            
+            data = response.json()
+            choice = data["choices"][0]
+            
+            # Check if function was called
+            if choice.get("finish_reason") == "function_call" or choice["message"].get("function_call"):
+                func_call = choice["message"]["function_call"]
+                if func_call["name"] == "send_booking_request":
+                    booking_data = json.loads(func_call["arguments"])
+                    email_sent = await send_andre_notification(booking_data)
+                    
+                    # Add function result to conversation
+                    ghh_conversations[conv_id].append(choice["message"])
+                    ghh_conversations[conv_id].append({
+                        "role": "function",
+                        "name": "send_booking_request",
+                        "content": json.dumps({"success": email_sent})
+                    })
+                    
+                    # Get final response from GPT
+                    response2 = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {OPENAI_API_KEY}"
+                        },
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": ghh_conversations[conv_id],
+                            "max_tokens": 200,
+                            "temperature": 0.7
+                        },
+                        timeout=30.0
+                    )
+                    data2 = response2.json()
+                    reply = data2["choices"][0]["message"]["content"]
+                    ghh_conversations[conv_id].append({"role": "assistant", "content": reply})
+                    logger.info(f"GHH Booking sent for: {booking_data.get('apartment')}")
+                    return {"reply": reply, "conversationId": conv_id, "bookingSent": True}
+            
+            reply = choice["message"]["content"]
+            ghh_conversations[conv_id].append({"role": "assistant", "content": reply})
+            
+            logger.info(f"GHH Chat: {req.message[:50]}... -> {reply[:50]}...")
+            return {"reply": reply, "conversationId": conv_id}
+            
+    except Exception as e:
+        logger.error(f"GHH Chat error: {e}")
+        return JSONResponse({"error": "Service temporarily unavailable"}, status_code=500)
