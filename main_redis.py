@@ -779,7 +779,10 @@ async def send_andre_notification(booking_data: dict) -> bool:
     SMTP_HOST = "mail.privateemail.com"
     SMTP_PORT = 587  # STARTTLS
     SMTP_USER = os.environ.get("SMTP_USER", "carlos@chatproai.io")
-    SMTP_PASS = os.environ.get("SMTP_PASS", "}=3(/z^Kh.A8,dF")
+    SMTP_PASS = os.environ.get("SMTP_PASS", "")
+    if not SMTP_PASS:
+        print("WARNUNG: SMTP_PASS nicht gesetzt - Mailversand deaktiviert")
+        return False
     ANDRE_EMAIL = "drebroeders@gmail.com"
     
     try:
